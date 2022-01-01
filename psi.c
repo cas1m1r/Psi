@@ -11,10 +11,9 @@
 #include <asm/uaccess.h>
 #include <linux/slab.h>
 #include <linux/init.h>
-#include <linux/cdev.h>o
+#include <linux/cdev.h> 
 #include <linux/init.h>
 #include <linux/rtc.h>
-#include "nmonitor.h"
 int unlocked = 0;
 
 MODULE_LICENSE("GPL");
@@ -58,12 +57,6 @@ static unsigned long **find_sys_call_table() {
     return NULL;
 }
 
-void create_logfile(void){
-	char *argv[] = { "/usr/bin/touch", "/tmp/activity.psilog",NULL };
-    char *envp[] = { "HOME=/", NULL };
-    call_usermodehelper(argv[0], argv, envp, UMH_WAIT_EXEC);
-}
-
 
 asmlinkage long psi_open(const char __user *filename, int flags,umode_t mode){
 	int len = strlen(filename);
@@ -73,10 +66,23 @@ asmlinkage long psi_open(const char __user *filename, int flags,umode_t mode){
 }
 
 asmlinkage int psi_execve(const char *file, const char *const argv[], const char *const envp[]){
-	
+	// TODO: Need a way to dump variable argument sizes
 	int nargin = sizeof(argv)/sizeof(const char);
-	if(nargin > 1){
-		printk(KERN_INFO "[ψe]: %s %s", argv[0], argv[1]);
+	// if(nargin > 1){
+	// 	printk(KERN_INFO "[ψe]: %s %s", argv[0], argv[1]);
+	// }
+	switch(nargin){
+		case 1:
+			printk(KERN_INFO "[ψe]: %s %s", argv[0]);
+			break;
+		case 2:
+			printk(KERN_INFO "[ψe]: %s %s", argv[0], argv[1]);
+			break;
+		case 3:
+			printk(KERN_INFO "[ψe]: %s %s %s", argv[0], argv[1], argv[2]);
+			break;
+		default:
+			break;
 	}
 	
 	// Hand execution back to execve
@@ -87,7 +93,7 @@ asmlinkage long psi_bind(int fd,struct sockaddr __user *s, int flag){
 	// if(s->sa_family == AF_INET){
 	// 	 &(((struct sockaddr_in*)s)->sin_addr);
 	// }
-	printk(KERN_INFO "[Ψs]: socket bind('0.0.0.0',%d)",port);
+	// printk(KERN_INFO "[Ψs]: socket bind('0.0.0.0',%d)",port);
 	return original_bind(fd, s, flag);
 }
 
@@ -224,9 +230,6 @@ unsigned int hook_send_fn(void *priv,
 			/* translate from network bits order to host bits order */
 			dest_port = ntohs(tcp_header->dest);
 
-			/* drop the pack if it should be blocked */
-			
-
 			/* print out the information in the header */
 			printk(KERN_INFO "[Ψnx]: Packet sent to: %pI4:%d",&(ip_header->saddr), dest_port);
 			break;
@@ -237,9 +240,6 @@ unsigned int hook_send_fn(void *priv,
 			udp_header = udp_hdr(skb);
 			/* translate from network bits order to host bits order */
 			dest_port = ntohs(udp_header->dest);
-
-			/* drop the pack if it should be blocked */
-			
 
 			/* print out the information in the header */
 			printk(KERN_INFO "[Ψnx]: Packet sent to: %pI4:%d",&(ip_header->daddr), dest_port);
@@ -256,22 +256,3 @@ unsigned int hook_send_fn(void *priv,
 
 module_init(psi_start);
 module_exit(psi_end);
-
-
-/************
- * N O T E S
- * 
- * Setting up a /dev/psi works pretty well, but piping messages out
- * through that instead of to DMESG is turning out to be a bit hard
- * to get working right.
- * 
- * 
- * And this isnt really all that useful to users if they need to be
- * continuously polling dmesg to see data. It's also probably bad 
- * practice to congest the dmesg log like that in the first place.
- * 
- * In the end a seperate file seems clean, but then we have to essentially hijack 
- * all file operations to make sure they dont interfere with our logs... So 
- * basically employing techniques from malware to make a tool that could hopefully
- * make finding malware easier.
- ************/
