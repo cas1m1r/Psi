@@ -11,7 +11,7 @@
 #include <asm/uaccess.h>
 #include <linux/slab.h>
 #include <linux/init.h>
-#include <linux/cdev.h> 
+#include <linux/cdev.h>o
 #include <linux/init.h>
 #include <linux/rtc.h>
 #include "nmonitor.h"
@@ -34,14 +34,11 @@ static unsigned long **find_sys_call_table(void);
 asmlinkage int psi_umask(mode_t umask);
 asmlinkage long psi_open(const char __user *filename, int flags, umode_t mode);
 asmlinkage int psi_execve(const char* file,const char* const argv[],const char* const envp[]);
+
 asmlinkage int (*original_umask)(mode_t umask);
+asmlinkage long (*original_recv)(int, void __user *, size_t, unsigned);
 asmlinkage long (*original_sys_open)(const char __user *, int, umode_t);
 asmlinkage int (*original_execve)(const char* file,const char* const argv[],const char* const envp[]);
-asmlinkage long (*original_bind)(int, struct sockaddr __user *, int);
-unsigned int hook_recv_fn(void *,struct sk_buff *,const struct nf_hook_state *);
-asmlinkage long (*original_recv)(int, void __user *, size_t, unsigned);
-
-
 
 
 
@@ -67,35 +64,14 @@ asmlinkage long psi_open(const char __user *filename, int flags,umode_t mode){
 }
 
 asmlinkage int psi_execve(const char *file, const char *const argv[], const char *const envp[]){
-	// TODO: Need a way to dump variable argument sizes
+	
 	int nargin = sizeof(argv)/sizeof(const char);
-	// if(nargin > 1){
-	// 	printk(KERN_INFO "[ψe]: %s %s", argv[0], argv[1]);
-	// }
-	switch(nargin){
-		case 1:
-			printk(KERN_INFO "[ψe]: %s %s", argv[0]);
-			break;
-		case 2:
-			printk(KERN_INFO "[ψe]: %s %s", argv[0], argv[1]);
-			break;
-		case 3:
-			printk(KERN_INFO "[ψe]: %s %s %s", argv[0], argv[1], argv[2]);
-			break;
-		default:
-			break;
+	if(nargin > 1){
+		printk(KERN_INFO "[ψe]: %s %s", argv[0], argv[1]);
 	}
 	
 	// Hand execution back to execve
 	return original_execve(file, argv, envp);
-}
-
-asmlinkage long psi_bind(int fd,struct sockaddr __user *s, int flag){
-	// if(s->sa_family == AF_INET){
-	// 	 &(((struct sockaddr_in*)s)->sin_addr);
-	// }
-	// printk(KERN_INFO "[Ψs]: socket bind('0.0.0.0',%d)",port);
-	return original_bind(fd, s, flag);
 }
 
 
@@ -114,7 +90,7 @@ static int __init psi_start(void){
 	// Get The Address of SYSCALL_TABLE	
 	sys_call_table = find_sys_call_table();
     if(!sys_call_table) { /* operation not permitted */
-		printk(KERN_ERR "[Ψ]: Couldn't find sys_call_table.\n");
+		printk(KERN_ERR "Couldn't find sys_call_table.\n");
 		return -EPERM;  
     }
 
@@ -125,11 +101,9 @@ static int __init psi_start(void){
 	// original_sys_open = (void *) sys_call_table[__NR_open];
 	original_execve = (void *) sys_call_table[__NR_execve];
 	original_umask = (void *) sys_call_table[__NR_umask];
-	// original_bind = (void *) sys_call_table[__NR_bind];
 	sys_call_table[__NR_execve] = (unsigned long*) psi_execve;
 	sys_call_table[__NR_umask] = (unsigned long*) psi_umask;
 	// sys_call_table[__NR_open] = (unsigned long*) psi_open;
-	// sys_call_table[__NR_bind] = (unsigned long*) psi_bind;
 	// Change the value back in CR0
 	ENABLE_WRITE_PROTECTION;
 
@@ -162,7 +136,6 @@ static void __exit psi_end(void){
 	// sys_call_table[__NR_open] = (unsigned long *) original_sys_open;
 	sys_call_table[__NR_execve] = (unsigned long *) original_execve;
 	sys_call_table[__NR_umask] = (unsigned long *) original_umask;
-	// sys_call_table[__NR_bind] = (unsigned long *) original_bind;
 	ENABLE_WRITE_PROTECTION;
 }
 
@@ -231,6 +204,9 @@ unsigned int hook_send_fn(void *priv,
 			/* translate from network bits order to host bits order */
 			dest_port = ntohs(tcp_header->dest);
 
+			/* drop the pack if it should be blocked */
+			
+
 			/* print out the information in the header */
 			printk(KERN_INFO "[Ψnx]: Packet sent to: %pI4:%d",&(ip_header->saddr), dest_port);
 			break;
@@ -241,6 +217,9 @@ unsigned int hook_send_fn(void *priv,
 			udp_header = udp_hdr(skb);
 			/* translate from network bits order to host bits order */
 			dest_port = ntohs(udp_header->dest);
+
+			/* drop the pack if it should be blocked */
+			
 
 			/* print out the information in the header */
 			printk(KERN_INFO "[Ψnx]: Packet sent to: %pI4:%d",&(ip_header->daddr), dest_port);
