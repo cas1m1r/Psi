@@ -4,6 +4,9 @@ In this repo I use code from a few different rootkits to built a small kernel mo
 
 Thus far the kernel module will hook system call table for intercepting attepts to open files or change user permissions. It will also enumerate incoming/outgoing packets via network sockets. 
 
+![testing](https://raw.githubusercontent.com/cas1m1r/Psi/master/testing.gif)
+
+
 **WARNING** This code is not very stable at the moment, and from my testing has led to unstability of the Ubuntu instance after running for a while. This code is in active development, and I am simply learning, so use at your own risk!
 
 
