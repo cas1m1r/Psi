@@ -14,13 +14,12 @@
 #include <linux/cdev.h>o
 #include <linux/init.h>
 #include <linux/rtc.h>
-#include "nmonitor.h"
-int unlocked = 0;
+#include "netfilter.h"
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("tyl3rdurd3n");
 MODULE_DESCRIPTION("Using techniques from malware to find malware.");
-MODULE_VERSION("0.0.1");
+MODULE_VERSION("0.0.2");
 
 
 // Macros to enable changing the syscall table through control register
@@ -29,12 +28,12 @@ MODULE_VERSION("0.0.1");
 
 asmlinkage unsigned long **sys_call_table;
 
-/* Function Prototypes */
+/* Hook Function Prototypes */
 static unsigned long **find_sys_call_table(void);
 asmlinkage int psi_umask(mode_t umask);
 asmlinkage long psi_open(const char __user *filename, int flags, umode_t mode);
 asmlinkage int psi_execve(const char* file,const char* const argv[],const char* const envp[]);
-
+/* Pointers to Hooked Function Prototypes */
 asmlinkage int (*original_umask)(mode_t umask);
 asmlinkage long (*original_recv)(int, void __user *, size_t, unsigned);
 asmlinkage long (*original_sys_open)(const char __user *, int, umode_t);
@@ -42,7 +41,7 @@ asmlinkage int (*original_execve)(const char* file,const char* const argv[],cons
 
 
 
-/* 			HOOKING FUNCTIONS				*/
+
 static unsigned long **find_sys_call_table() {
     unsigned long offset;
     unsigned long **sct;
@@ -55,7 +54,7 @@ static unsigned long **find_sys_call_table() {
     return NULL;
 }
 
-
+/* 			HOOKING FUNCTIONS				*/
 asmlinkage long psi_open(const char __user *filename, int flags,umode_t mode){
 	int len = strlen(filename);
 	// Log go output device what file is being opened
@@ -74,10 +73,6 @@ asmlinkage int psi_execve(const char *file, const char *const argv[], const char
 	return original_execve(file, argv, envp);
 }
 
-
-
-
-// Should hook the setuid function to always work for username psi
 asmlinkage int psi_umask(mode_t umask){
 	printk(KERN_NOTICE "[Ψe]: Someone wants root");
 	return original_umask(umask);
@@ -90,7 +85,7 @@ static int __init psi_start(void){
 	// Get The Address of SYSCALL_TABLE	
 	sys_call_table = find_sys_call_table();
     if(!sys_call_table) { /* operation not permitted */
-		printk(KERN_ERR "Couldn't find sys_call_table.\n");
+		printk(KERN_ERR "[ψ]: Couldn't find sys_call_table.\n");
 		return -EPERM;  
     }
 
@@ -98,17 +93,16 @@ static int __init psi_start(void){
 	// change value in CR0
 	DISABLE_WRITE_PROTECTION;
 	// Place Hooks 
-	// original_sys_open = (void *) sys_call_table[__NR_open];
+	original_sys_open = (void *) sys_call_table[__NR_open];
 	original_execve = (void *) sys_call_table[__NR_execve];
 	original_umask = (void *) sys_call_table[__NR_umask];
 	sys_call_table[__NR_execve] = (unsigned long*) psi_execve;
 	sys_call_table[__NR_umask] = (unsigned long*) psi_umask;
-	// sys_call_table[__NR_open] = (unsigned long*) psi_open;
+	sys_call_table[__NR_open] = (unsigned long*) psi_open;
 	// Change the value back in CR0
 	ENABLE_WRITE_PROTECTION;
 
-	/* set hook option for pre routing */
-	/* when pack arrived, hook_recv_fn will be triggered */
+	/* set hook option for pre routing when packet arrives */
 	nfhook_recv.hook = hook_recv_fn;
 	nfhook_recv.hooknum = NF_INET_PRE_ROUTING;	// resigister pre routing hook
 	nfhook_recv.pf = PF_INET;
@@ -118,8 +112,7 @@ static int __init psi_start(void){
 		printk(KERN_INFO "[Ψnx]: Could not register the netfilter receiving hook");
 	}
 
-	/* set hook option for post routing */
-	/* when pack is about to be sent, hook_send_fn will be triggered */
+	/* set hook option for post routing when pack is about to be sent */
 	nfhook_send.hook = hook_send_fn;
 	nfhook_send.hooknum = NF_INET_POST_ROUTING;	// resigister porst routing hook
 	nfhook_send.pf = PF_INET;
@@ -133,7 +126,7 @@ static void __exit psi_end(void){
 	printk(KERN_INFO "[ψ]>: Releasing Hooks");
 	/* Restore original values in syscall table */
     DISABLE_WRITE_PROTECTION;
-	// sys_call_table[__NR_open] = (unsigned long *) original_sys_open;
+	sys_call_table[__NR_open] = (unsigned long *) original_sys_open;
 	sys_call_table[__NR_execve] = (unsigned long *) original_execve;
 	sys_call_table[__NR_umask] = (unsigned long *) original_umask;
 	ENABLE_WRITE_PROTECTION;
@@ -203,8 +196,6 @@ unsigned int hook_send_fn(void *priv,
 			tcp_header = tcp_hdr(skb);
 			/* translate from network bits order to host bits order */
 			dest_port = ntohs(tcp_header->dest);
-
-			/* drop the pack if it should be blocked */
 			
 
 			/* print out the information in the header */
@@ -222,7 +213,7 @@ unsigned int hook_send_fn(void *priv,
 			
 
 			/* print out the information in the header */
-			printk(KERN_INFO "[Ψnx]: Packet sent to: %pI4:%d",&(ip_header->daddr), dest_port);
+			printk(KERN_INFO "[Ψnx]: Pack sent to: %pI4:%d",&(ip_header->daddr), dest_port);
 			break;
 
 		/* Other protocol like ICMP, RAW, ESP, etc. */
