@@ -14,7 +14,7 @@
 #include <linux/cdev.h>
 #include <linux/init.h>
 #include <linux/rtc.h>
-#include "nmonitor.h"
+#include "netfilter.h"
 int unlocked = 0;
 
 MODULE_LICENSE("GPL");
