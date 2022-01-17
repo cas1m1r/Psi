@@ -1,3 +1,4 @@
+import engine
 import socket
 import json
 import time
@@ -22,7 +23,16 @@ class PsiLog:
 		self.inbound = port
 		self.saving = doSave
 		self.data = {}
+		# Setup a blocklist if one doesnt exist
+		self.blocklist = self.setup_blocklist()
+		print('[+] Loaded Blocklist of %d Malicious IP Addresses' % len(self.blocklist))
 		self.receive()
+
+	def setup_blocklist(self):
+		if not os.path.isfile(os.path.join(os.getcwd(),'blocklist.txt')):
+			return engine.create_blocklist()
+		else:
+			return open('blocklist.txt','r').read().split('\n')
 
 
 	def receive(self):
@@ -45,10 +55,13 @@ class PsiLog:
 						# Depending on hook type we parse message differently
 						if mode == 'Ψnx':
 							content = fields[-1].split(' ')[-1].split(':')[0]
+							if content in self.blocklist:
+								print('\033[1m\033[31mREQUEST TO MALICIOUS IP %s' % content)
 						else:
 							content = ' '.join(fields[4:])
 						# Build a dictionary for this entry (will make this easily JSONizable later)
 						self.data[ts] = {'HOOK': mode, 'DATA': content}
+
 						print(f'{ts}: {self.data[ts]}')
 					
 			except UnicodeDecodeError:
@@ -68,10 +81,11 @@ class PsiLog:
 			# Save to disk what was captured
 			print('{Ψ} Saving LogFiles')
 			self.dump_to_file()
-		dt = float(timestamps[-1]) - float(timestamps[0])
-		print(f'[-] Ψ Finished saving {dt} seconds of kernel messages [{len(timestamps)} entries]')
-		if len(timestamps) > 10000:
-			print('[*] This may take a while...')
+		try:
+			dt = float(timestamps[-1]) - float(timestamps[0])
+			print(f'[-] Ψ Finished saving {dt} seconds of kernel messages [{len(timestamps)} entries]')
+		except:
+			pass
 
 	def dump_to_file(self):
 		log_name = 'example.log' # TODO: Create logfilename based on datestr
