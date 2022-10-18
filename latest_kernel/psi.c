@@ -1,6 +1,7 @@
 /** 				ψ kernel module 			**/
 #include <linux/module.h>
 #include <linux/init.h>
+#include "netfilter.h"
 #include "hooks.h"
 
 // Module Defs 
@@ -70,9 +71,12 @@ static asmlinkage int psi_execve(const struct pt_regs* pt_regs){
 	 */
 	char* file = (char*)pt_regs->di;
 	char* argv = (char*)pt_regs->si;
-	// char* envp[] = (char*)pt_regs->dx;
+	char* envp = (char*)pt_regs->dx;
 
-	printk(KERN_INFO "[ψe]: %s %p", file, argv);
+	//TODO: Figure out how to display argv, envp. They're converting 
+	// oddly from the registers, maybe shift left by 8 or something?
+
+	printk(KERN_INFO "[ψe]: %s", file);
 	// Hand execution back to execve
 	return original_execve(pt_regs);
 }
@@ -84,7 +88,7 @@ static asmlinkage int psi_umask(const struct pt_regs* pt_regs){
      * rdi: hold the umask value	= mode_t umask
 	 **/
 	mode_t umask = (mode_t)pt_regs->di;
-	printk(KERN_NOTICE "[Ψe]: Someone wants root");
+	printk(KERN_NOTICE "[Ψe]: Someone changing to privs: %ld", umask);
 	return original_umask(pt_regs);
 }
 
@@ -116,9 +120,131 @@ static int __init psi_start(void){
 	// reset write protection flag!
 	enable_write_protection();
 	printk(KERN_INFO "[ψ]: SUCCEEDED placing syscall hooks");
+	printk(KERN_INFO "[ψ]: Attempting to hook socket functions...");
+	/* set hook option for pre routing */
+	/* when pack arrived, hook_recv_fn will be triggered */
+	nfhook_recv.hook = hook_recv_fn;
+	nfhook_recv.hooknum = NF_INET_PRE_ROUTING;	// resigister pre routing hook
+	nfhook_recv.pf = PF_INET;
+	nfhook_recv.priority = 1;
+	/* check if registration is successful */
+	if (nf_register_net_hook(&init_net, &nfhook_recv)) {
+		printk(KERN_INFO "[Ψnx]: Could not register the netfilter receiving hook");
+	}
+	printk(KERN_INFO "[Ψnx]: Hooks Set for all inbound network traffic");
+	/* set hook option for post routing */
+	/* when pack is about to be sent, hook_send_fn will be triggered */
+	nfhook_send.hook = hook_send_fn;
+	nfhook_send.hooknum = NF_INET_POST_ROUTING;	// resigister porst routing hook
+	nfhook_send.pf = PF_INET;
+	nfhook_send.priority = 1;
+	if (nf_register_net_hook(&init_net, &nfhook_send)) {
+		printk(KERN_INFO "[Ψnx]: Could not register the netfilter receiving hook");
+	}
+	printk(KERN_INFO "[Ψnx]: Hooks Set for all outbound network traffic");
 	return 0;
 }
 
+unsigned int hook_recv_fn(void *priv,
+		struct sk_buff *skb,
+		const struct nf_hook_state *state){
+	
+	/* declaration */
+	unsigned short dest_port;
+
+	/* hard coding for demo purpose */
+	/* get ip header from socket buffer we are owned */
+	ip_header = ip_hdr(skb);
+	char IP[16];
+	snprintf(IP,16,"%pI4",&ip_header->saddr);
+
+	/* get different header for different protocol  */
+	switch (ip_header->protocol) {
+		/* TCP */
+		case IPPROTO_TCP:
+			/* get tcp header if the protocol of the pack is tcp */
+			tcp_header = tcp_hdr(skb);
+			/* translate from network bits order to host bits order */
+			dest_port = ntohs(tcp_header->dest);
+		
+			if (!strstr(IP,"10.0.") && !strstr(IP,"127.0.")){
+				/* print out the information in the header */
+				printk(KERN_INFO "[Ψnx]: Packet received from: %pI4:%d",&(ip_header->saddr), dest_port);
+				break;
+			}
+
+		/* UDP */
+		case IPPROTO_UDP:
+			/* get udp header if the protocol of the pack is udp */
+			udp_header = udp_hdr(skb);
+			/* translate from network bits order to host bits order */
+			dest_port = ntohs(udp_header->dest);
+			if (!strstr(IP,"10.0.") && !strstr(IP,"127.0.")){
+				/* print out the information in the header */
+				printk(KERN_INFO "[Ψnx]: Packet received from: %pI4:%d",&(ip_header->saddr),dest_port);
+				break;
+			}
+
+		/* Other protocol like ICMP, RAW, ESP, etc. */
+		default:
+			// printk(KERN_INFO "[Ψnx]: Packet received from: %pI4\n", &(ip_header->saddr));
+			break;
+	}
+	/* let netfilter accept the incoming pack */
+	return NF_ACCEPT;
+}
+
+unsigned int hook_send_fn(void *priv, 
+		struct sk_buff *skb, 
+		const struct nf_hook_state *state) {
+	
+	/* declaration */
+	unsigned short dest_port;
+
+	/* hard coding for demo purpose */
+	/* get ip header from socket buffer we are owned */
+	ip_header = ip_hdr(skb);
+
+	char IP[16];
+	snprintf(IP,16,"%pI4",&ip_header->saddr);
+
+	/* get different header for different protocol  */
+	switch (ip_header->protocol) {
+		/* TCP */
+		case IPPROTO_TCP:
+			/* get tcp header if the protocol of the pack is tcp */
+			tcp_header = tcp_hdr(skb);
+			/* translate from network bits order to host bits order */
+			dest_port = ntohs(tcp_header->dest);
+
+			/* drop the pack if it should be blocked */
+			if (!strstr(IP,"10.0.") && !strstr(IP,"127.0.")){
+				/* print out the information in the header */
+				printk(KERN_INFO "[Ψnx]: Packet sent to: %pI4:%d",&(ip_header->saddr), dest_port);
+				break;
+			}
+		/* UDP */
+		case IPPROTO_UDP:
+			/* get udp header if the protocol of the pack is udp */
+			udp_header = udp_hdr(skb);
+			/* translate from network bits order to host bits order */
+			dest_port = ntohs(udp_header->dest);
+
+			/* drop the pack if it should be blocked */
+			if (!strstr(IP,"10.0.") && !strstr(IP,"127.0.")){
+				/* print out the information in the header */
+				printk(KERN_INFO "[Ψnx]: Packet sent to: %pI4:%d",&(ip_header->daddr), dest_port);
+				break;
+			}
+
+		/* Other protocol like ICMP, RAW, ESP, etc. */
+		default:
+			// printk(KERN_INFO "[Ψnx]: Packet sent to %pI4\n", &(ip_header->saddr));
+			break;
+	}
+	/* let netfilter accept the incoming pack */
+	return NF_ACCEPT;
+}
 
 static void __exit psi_stop(void){
 	printk(KERN_INFO "[ψ]>: Releasing Hooks");
@@ -128,6 +254,8 @@ static void __exit psi_stop(void){
 	sys_call_table[__NR_execve] = original_execve;
 	sys_call_table[__NR_umask] = original_umask;
 	enable_write_protection(); 
+	nf_unregister_net_hook(&init_net, &nfhook_recv);
+	nf_unregister_net_hook(&init_net, &nfhook_send);
 	printk(KERN_INFO "<< ψ Collapsed >>");
 }
 
