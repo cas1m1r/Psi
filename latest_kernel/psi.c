@@ -6,7 +6,6 @@
 #include <linux/file.h>
 #include <linux/init.h>
 #include <linux/fs.h>
-
 #include "netfilter.h"
 #include "hooks.h"
 
@@ -31,7 +30,8 @@ typedef asmlinkage long(*tt_syscall)(const struct pt_regs*);
 static tt_syscall original_sys_open;
 static tt_syscall original_execve;
 static tt_syscall original_umask;
-
+static tt_syscall original_chmod; 
+static tt_syscall original_chown;
 
 /* Hooking basics */
 unsigned long cr0;
@@ -89,11 +89,7 @@ static asmlinkage long psi_open(const struct pt_regs *pt_regs){
 	int len = strlen(filename);
 	// Log what file is being opened
 	printk("[Ψo]: open(%s, %d, %d)", filename, flags, mode);
-	// Log Event
-	// char* msg = (char*)kmalloc(sizeof(char)*BLK_SZ, GFP_USER);
-	// snprintf(msg,BLK_SZ,"[Ψo]: open(%s)\n", filename);
-	// BLK_CNT = psi_print(msg,snprintf(msg,BLK_SZ,"[Ψo]: open(%s)\n", filename),BLK_CNT);
-	// kfree(msg);
+
 	return (*original_sys_open)(pt_regs);
 }
 
@@ -114,16 +110,10 @@ static asmlinkage int psi_execve(const struct pt_regs* pt_regs){
 
 	printk(KERN_INFO "[ψe]: %s %pS", file, argv);
 
-	// Log event
-	// char* msg = (char*)kmalloc(sizeof(char)*BLK_SZ, GFP_USER);
-	// // snprintf(msg,BLK_SZ,"[ψe]: %s\n", file);
-	// BLK_CNT = psi_print(msg, snprintf(msg,BLK_SZ,"[ψe]: %s\n", file), BLK_CNT);
-	// kfree(msg);
 
 	// Hand execution back to execve
 	return original_execve(pt_regs);
 }
-
 
 
 static asmlinkage int psi_umask(const struct pt_regs* pt_regs){
@@ -134,14 +124,41 @@ static asmlinkage int psi_umask(const struct pt_regs* pt_regs){
 	 **/
 	mode_t umask = (mode_t)pt_regs->di;
 	printk(KERN_NOTICE "[Ψu]: Someone changing to privs: %ld", umask);
-
-	// Log event
-	// char* msg = (char*)kmalloc(sizeof(char)*BLK_SZ, GFP_USER);
-	// snprintf(msg,BLK_SZ,"[Ψu]: Someone changing to privs: %ld\n", umask);
-	// BLK_CNT = psi_print(msg, BLK_SZ, BLK_CNT);
-	// kfree(msg);
-
 	return original_umask(pt_regs);
+}
+
+
+static asmlinkage int psi_chmod(const struct pt_regs* pt_regs){
+	/** Hooked function chmod(const char* f, mode_t mode)
+	 *  returns 0 on success. 
+	 * rax: 90 (syscall number)
+	 * rdi: const char* filename
+	 * rsi: mode_t mode
+	 **/
+	char* file = (char*)pt_regs->di;
+	mode_t mode = (mode_t)pt_regs->si;
+
+	printk(KERN_INFO "[Ψch] chmod(%s, %ld", file, mode);
+
+	return original_chmod(pt_regs);
+}
+
+
+
+static asmlinkage int psi_chown(const struct pt_regs* pt_regs){
+	/** Hooked Function chown(const achar* filename, uid_t user, gid_t group)
+	 * rax: 92 (syscall number)
+	 * rdi: const char* file
+	 * rsi: uid_t user
+	 * rdx: gid_t group
+	 **/
+	char* file = (char*)pt_regs->di;
+	uid_t user = (uid_t)pt_regs->si;
+	gid_t group = (gid_t)pt_regs->dx;
+	printk(KERN_INFO "[Ψch] chown(%s, %ld %ld)", file, user, group);
+
+
+	return original_chown(pt_regs);
 }
 
 /*****************| Kernel Module Functions |*****************/
@@ -167,15 +184,21 @@ static int __init psi_start(void){
 	cr0 = read_cr0();
 	disable_write_protection();
 
-	// Place Hooks 
+	// Find original system calls we want to hook
 	printk(KERN_INFO "[ψ]: Replacing Syscall with Hooks...");
 	original_sys_open = (tt_syscall) sys_call_table[__NR_open];
 	original_execve =  (tt_syscall) sys_call_table[__NR_execve];
 	original_umask =  (tt_syscall) sys_call_table[__NR_umask];
+	original_chmod = (tt_syscall) sys_call_table[__NR_chmod];
+	original_chown = (tt_syscall) sys_call_table[__NR_chown];
 	
+
+	// replace original system calls with our hooked version 
 	sys_call_table[__NR_execve] = psi_execve;
 	sys_call_table[__NR_umask] =  psi_umask;
 	sys_call_table[__NR_open] =  psi_open;
+	sys_call_table[__NR_chmod] = psi_chmod;
+	sys_call_table[__NR_chown] = psi_chown;
 
 	// reset write protection flag!
 	enable_write_protection();
