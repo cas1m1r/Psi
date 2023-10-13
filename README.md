@@ -21,6 +21,15 @@ From here we can start writing code to analyze what's happening in real time!
 
 **WARNING** This code is not very stable at the moment, and from my testing has led to unstability of the Ubuntu instance after running for a while. This code is in active development, and I am simply learning, so use at your own risk!
 
+# Installing 
+If you do feel brave and want to try using this module you can:
+  * clone the repo
+  * go to the `Psi/latest_kernel` folder
+  * run `make` to build project.
+  * If build works, you should have a psi.ko object. Insert the module using `insmod psi.ko`
+
+Latest Kernel Tested: 
+`Linux 5.19-0-46-generic` in Ubuntu 22.04 LTS. 
 
 # **DISCLAIMER**
 *The contents of this repository are designed purely for educational purposes only. I've designed, tested, and written this code solely for testing on my own personal machines to better understand the techniques and design of Linux based Malware and Security related Programming topics. DO NOT use any of this on equipment that is not yours or do not have permission do so with. I am not responsible for any of the poor choices you may or not make*. 
