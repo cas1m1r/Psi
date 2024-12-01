@@ -6,14 +6,13 @@
 #include <linux/file.h>
 #include <linux/init.h>
 #include <linux/fs.h>
-#include "netfilter.h"
 #include "hooks.h"
 
 // Module Defs 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("tyl3rdurd3n");
 MODULE_DESCRIPTION("Using malware to find malware.");
-MODULE_VERSION("0.3");
+MODULE_VERSION("0.42");
 
 // stuff for logging
 #define PSILOG "/tmp/.psi.log"
@@ -83,14 +82,20 @@ static asmlinkage long psi_open(const struct pt_regs *pt_regs){
      * rsi: which contains the flags 			= int flags
      * rdx: mode of file opening 				= int mode
      */
-	char* filename = (char*)pt_regs->di; 		
-	int flags = (int)pt_regs->si; 		 		
-	int mode = (int) pt_regs->dx;				
-	int len = strlen(filename);
-	// Log what file is being opened
-	printk("[Ψo]: open(%s, %d, %d)", filename, flags, mode);
+	// char* filename = (char*)pt_regs->di; 		z
+	//int flags = (int)pt_regs->si; 		 		
+	//int mode = (int) pt_regs->dx;				
+	//int len = strlen(filename);
+	char filename[256];
+    memset(filename, 0, 256);
+    filename[255] = '\0';
 
-	return (*original_sys_open)(pt_regs);
+    long res = strncpy_from_user(filename, (const char*)pt_regs->di, 255);
+    if (res != -EFAULT)
+		// Log what file is being opened
+		printk(KERN_INFO "[Ψo]: open(%s)", filename);
+
+	return original_sys_open(pt_regs);
 }
 
 static asmlinkage int psi_execve(const struct pt_regs* pt_regs){
@@ -101,14 +106,21 @@ static asmlinkage int psi_execve(const struct pt_regs* pt_regs){
      * rsi: hold the arguments used in execve() call 	= const char* argv[]
      * rdx: holds environment variable vals for execve 	= const char* envp[]
 	 */
-	char* file = (char*)pt_regs->di;
-	char* argv = (char*)pt_regs->si;
-	char* envp = (char*)pt_regs->dx;
+	// char* file = (char*)pt_regs->di;
+	// char* argv = (char*)pt_regs->si;
+	// char* envp = (char*)pt_regs->dx;
 
 	//TODO: Figure out how to display argv, envp. They're converting 
 	// oddly from the registers, maybe shift left by 8 or something?
+	// const char __user *filename = (const char*)pt_regs->di;
+	char filename[256];
+    memset(filename, 0, 256);
+    filename[255] = '\0';
 
-	printk(KERN_INFO "[ψe]: %s %pS", file, argv);
+    long res = strncpy_from_user(filename, (const char*)pt_regs->di, 255);
+    if (res != -EFAULT)
+		// Log what file is being opened
+		printk(KERN_INFO "[Ψe]: execve(%s)", filename);
 
 
 	// Hand execution back to execve
@@ -136,9 +148,16 @@ static asmlinkage int psi_chmod(const struct pt_regs* pt_regs){
 	 * rsi: mode_t mode
 	 **/
 	char* file = (char*)pt_regs->di;
-	mode_t mode = (mode_t)pt_regs->si;
+	//mode_t mode = (mode_t)pt_regs->si;
+	char filename[256];
+    memset(filename, 0, 256);
+    filename[255] = '\0';
 
-	printk(KERN_INFO "[Ψch] chmod(%s, %ld", file, mode);
+    long res = strncpy_from_user(filename, (const char*)pt_regs->di, 255);
+    if (res != -EFAULT)
+		// Log what file is being opened
+		printk(KERN_INFO "[Ψch] chmod(%s, %ld", file);
+	
 
 	return original_chmod(pt_regs);
 }
@@ -161,202 +180,39 @@ static asmlinkage int psi_chown(const struct pt_regs* pt_regs){
 	return original_chown(pt_regs);
 }
 
+
+/* Define the hooks for ftrace hook engine */
+static struct ftrace_hook intercepted[] = {
+	HOOK("__x64_sys_open", psi_open, &original_sys_open),
+	HOOK("__x64_sys_execve", psi_execve, &original_execve)
+};
+
+
 /*****************| Kernel Module Functions |*****************/
 
 
 static int __init psi_start(void){
 	printk(KERN_INFO "[ψ]:\t%s", "ENTANGLED");
-	
-	// find syscall table 
-	sys_call_table = hook_syscall_table();
-	
-	// check whether we found it, if not just stop because everything else will fail 
-	if (sys_call_table == NULL) return -1;
-	printk(KERN_INFO "[ψ]: Found sys_call_table at: 0x%p\n", sys_call_table);	
-	
-	BLK_CNT = 0;
-	char* msg = (char*)kmalloc(sizeof(char)*BLK_SZ, GFP_USER);
-	snprintf(msg,BLK_SZ,"[ψ]: Found sys_call_table at: 0x%p\n", sys_call_table);
-	BLK_CNT = psi_print(msg, BLK_SZ, BLK_CNT);
-	kfree(msg);
-
-	// Unprotect Memory and re-assign syscalls to our hooked routings 
-	cr0 = read_cr0();
-	disable_write_protection();
+	//Unprotect Memory and re-assign syscalls to our hooked routings 
+	//cr0 = read_cr0();
+	//disable_write_protection();
 
 	// Find original system calls we want to hook
-	printk(KERN_INFO "[ψ]: Replacing Syscall with Hooks...");
-	original_sys_open = (tt_syscall) sys_call_table[__NR_open];
-	original_execve =  (tt_syscall) sys_call_table[__NR_execve];
-	original_umask =  (tt_syscall) sys_call_table[__NR_umask];
-	original_chmod = (tt_syscall) sys_call_table[__NR_chmod];
-	original_chown = (tt_syscall) sys_call_table[__NR_chown];
-	
+	int err;
+	err = fh_install_hooks(intercepted, ARRAY_SIZE(intercepted));
+    if(err) return err;
 
-	// replace original system calls with our hooked version 
-	sys_call_table[__NR_execve] = psi_execve;
-	sys_call_table[__NR_umask] =  psi_umask;
-	sys_call_table[__NR_open] =  psi_open;
-	sys_call_table[__NR_chmod] = psi_chmod;
-	sys_call_table[__NR_chown] = psi_chown;
+    //enable_write_protection();
 
-	// reset write protection flag!
-	enable_write_protection();
 	printk(KERN_INFO "[ψ]: SUCCEEDED placing syscall hooks");
-	printk(KERN_INFO "[ψ]: Attempting to hook socket functions...");
-	/* set hook option for pre routing */
-	/* when pack arrived, hook_recv_fn will be triggered */
-	nfhook_recv.hook = hook_recv_fn;
-	nfhook_recv.hooknum = NF_INET_PRE_ROUTING;	// resigister pre routing hook
-	nfhook_recv.pf = PF_INET;
-	nfhook_recv.priority = 1;
-	/* check if registration is successful */
-	if (nf_register_net_hook(&init_net, &nfhook_recv)) {
-		printk(KERN_INFO "[Ψnx]: Could not register the netfilter receiving hook");
-	}
-	printk(KERN_INFO "[Ψnx]: Hooks Set for all inbound network traffic");
-	/* set hook option for post routing */
-	/* when pack is about to be sent, hook_send_fn will be triggered */
-	nfhook_send.hook = hook_send_fn;
-	nfhook_send.hooknum = NF_INET_POST_ROUTING;	// resigister porst routing hook
-	nfhook_send.pf = PF_INET;
-	nfhook_send.priority = 1;
-	if (nf_register_net_hook(&init_net, &nfhook_send)) {
-		printk(KERN_INFO "[Ψnx]: Could not register the netfilter receiving hook");
-	}
-	printk(KERN_INFO "[Ψnx]: Hooks Set for all outbound network traffic");
-
-	char* msg2 = (char*)kmalloc(sizeof(char)*BLK_SZ, GFP_USER);
-	snprintf(msg2,BLK_SZ,"[ψ]: All Socket and System hooks are set.\n");
-	BLK_CNT = psi_print(msg2, BLK_SZ, BLK_CNT);
-	kfree(msg2);
 	return 0;
 }
 
-unsigned int hook_recv_fn(void *priv,
-		struct sk_buff *skb,
-		const struct nf_hook_state *state){
-	
-	/* declaration */
-	unsigned short dest_port;
-
-	/* hard coding for demo purpose */
-	/* get ip header from socket buffer we are owned */
-	ip_header = ip_hdr(skb);
-	char IP[16];
-	snprintf(IP,16,"%pI4",&ip_header->saddr);
-
-	/* get different header for different protocol  */
-	switch (ip_header->protocol) {
-		/* TCP */
-		case IPPROTO_TCP:
-			/* get tcp header if the protocol of the pack is tcp */
-			tcp_header = tcp_hdr(skb);
-			/* translate from network bits order to host bits order */
-			dest_port = ntohs(tcp_header->dest);
-		
-			if (!strstr(IP,"10.0.") && !strstr(IP,"127.0.") && !strstr(IP,"192.168.")){
-				/* print out the information in the header */
-				printk(KERN_INFO "[Ψnx]: Packet received from: %pI4:%d",&(ip_header->saddr), dest_port);
-				
-				// Log event
-				// char* msg = (char*)kmalloc(sizeof(char)*BLK_SZ, GFP_USER);
-				// snprintf(msg,BLK_SZ,"[Ψnx]: Packet received from: %pI4:%d\n",&(ip_header->saddr), dest_port);
-				// BLK_CNT = psi_print(msg, BLK_SZ,BLK_CNT);
-				// kfree(msg);
-				break;
-			}
-
-		/* UDP */
-		case IPPROTO_UDP:
-			/* get udp header if the protocol of the pack is udp */
-			udp_header = udp_hdr(skb);
-			/* translate from network bits order to host bits order */
-			dest_port = ntohs(udp_header->dest);
-			if (!strstr(IP,"10.0.") && !strstr(IP,"127.0.") && !strstr(IP,"192.168.")){
-				/* print out the information in the header */
-				printk(KERN_INFO "[Ψnx]: Packet received from: %pI4:%d",&(ip_header->saddr),dest_port);
-				
-				// Log event
-				// char* msg = (char*)kmalloc(sizeof(char)*BLK_SZ, GFP_USER);
-				// snprintf(msg,BLK_SZ,"[Ψnx]: Packet received from: %pI4:%d\n",&(ip_header->saddr), dest_port);
-				// BLK_CNT = psi_print(msg, BLK_SZ,BLK_CNT);
-				// kfree(msg);
-				break;
-			}
-
-		/* Other protocol like ICMP, RAW, ESP, etc. */
-		default:
-			// printk(KERN_INFO "[Ψnx]: Packet received from: %pI4\n", &(ip_header->saddr));
-			break;
-	}
-	/* let netfilter accept the incoming pack */
-	return NF_ACCEPT;
-}
-
-unsigned int hook_send_fn(void *priv, 
-		struct sk_buff *skb, 
-		const struct nf_hook_state *state) {
-	
-	/* declaration */
-	unsigned short dest_port;
-
-	/* hard coding for demo purpose */
-	/* get ip header from socket buffer we are owned */
-	ip_header = ip_hdr(skb);
-
-	char IP[16];
-	snprintf(IP,16,"%pI4",&ip_header->saddr);
-
-	/* get different header for different protocol  */
-	switch (ip_header->protocol) {
-		/* TCP */
-		case IPPROTO_TCP:
-			/* get tcp header if the protocol of the pack is tcp */
-			tcp_header = tcp_hdr(skb);
-			/* translate from network bits order to host bits order */
-			dest_port = ntohs(tcp_header->dest);
-
-			/* drop the pack if it should be blocked */
-			if (!strstr(IP,"10.0.") && !strstr(IP,"127.0.")&& !strstr(IP,"192.168.")){
-				/* print out the information in the header */
-				printk(KERN_INFO "[Ψnx]: Packet sent to: %pI4:%d",&(ip_header->saddr), dest_port);
-				break;
-			}
-		/* UDP */
-		case IPPROTO_UDP:
-			/* get udp header if the protocol of the pack is udp */
-			udp_header = udp_hdr(skb);
-			/* translate from network bits order to host bits order */
-			dest_port = ntohs(udp_header->dest);
-
-			/* drop the pack if it should be blocked */
-			if (!strstr(IP,"10.0.") && !strstr(IP,"127.0.")&& !strstr(IP,"192.168.")){
-				/* print out the information in the header */
-				printk(KERN_INFO "[Ψnx]: Packet sent to: %pI4:%d",&(ip_header->daddr), dest_port);
-				break;
-			}
-
-		/* Other protocol like ICMP, RAW, ESP, etc. */
-		default:
-			// printk(KERN_INFO "[Ψnx]: Packet sent to %pI4\n", &(ip_header->saddr));
-			break;
-	}
-	/* let netfilter accept the incoming pack */
-	return NF_ACCEPT;
-}
 
 static void __exit psi_stop(void){
-	disable_write_protection();
-	// fix syscall table 
-	sys_call_table[__NR_open] = original_sys_open;
-	sys_call_table[__NR_execve] = original_execve;
-	sys_call_table[__NR_umask] = original_umask;
-	enable_write_protection(); 
-	nf_unregister_net_hook(&init_net, &nfhook_recv);
-	nf_unregister_net_hook(&init_net, &nfhook_send);
+	/* Unhook and restore the syscall and print to the kernel buffer */
+	fh_remove_hooks(intercepted, ARRAY_SIZE(intercepted));
 	printk(KERN_INFO "<< ψ Collapsed >>");
-	BLK_CNT = psi_print("[ψ]>: Releasing Hooks\n", 23, BLK_CNT);
 }
 
 
